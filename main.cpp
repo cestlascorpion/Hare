@@ -1,6 +1,6 @@
 #include <zlog.h>
 
-#include <cassert>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,11 +29,6 @@ string generate_message(int id, int idx) {
 
 unique_ptr<RabbitMQClient> GetHelper() {
     auto client = make_unique<RabbitMQClient>(host, port, user, password);
-
-    assert(client->ExchangeDeclare("exchange", type, false, true, false, false) != 0);
-    assert(client->QueueDeclare(queue, false, true, false, false) != 0);
-    assert(client->QueueBind(queue, "exchange", routing_key) != 0);
-
     if (client->Connect(vhost) != 0) {
         dzlog_debug("connect failed");
         return nullptr;
@@ -55,9 +50,6 @@ unique_ptr<RabbitMQClient> GetHelper() {
 
 unique_ptr<RabbitMQPublisher> GetPublisher() {
     auto publisher = make_unique<RabbitMQPublisher>(host, port, user, password);
-
-    assert(publisher->Publish("exchange", "routing_key", "hello world") != 0);
-
     if (publisher->Connect(vhost) != 0) {
         dzlog_debug("connect failed");
         return nullptr;
@@ -79,9 +71,6 @@ unique_ptr<RabbitMQPublisher> GetPublisher() {
 
 unique_ptr<RabbitMQConsumer> GetConsumer() {
     auto consumer = make_unique<RabbitMQConsumer>(host, port, user, password);
-
-    assert(consumer->Consume(queue, [](const string &) {}) != 0);
-
     if (consumer->Connect(vhost) != 0) {
         dzlog_debug("connect failed");
         return nullptr;
@@ -112,54 +101,82 @@ int main() {
             dzlog_debug("GetHelper failed");
             return -1;
         }
-        auto ret = helper->QueueDelete(queue, false, false);
+        auto ret = helper->Connect();
+        if (ret != 0) {
+            dzlog_debug("Connect failed: %d", ret);
+            return -1;
+        }
+        dzlog_debug("re-Connect success");
+        ret = helper->QueueDelete(queue, false, false);
         if (ret != 0) {
             dzlog_debug("QueueDelete failed: %d", ret);
             return -1;
         }
         dzlog_debug("QueueDelete success");
     }
-
-    auto publisher = GetPublisher();
-    if (!publisher) {
-        dzlog_debug("GetPublisher failed");
+    vector<future<void>> pubFutures;
+    for (int id = 0; id < 5; ++id) {
+        pubFutures.push_back(async(
+            launch::async,
+            [](int i) {
+                auto publisher = GetPublisher();
+                if (!publisher) {
+                    dzlog_error("GetPublisher %d failed", i);
+                    return;
+                }
+                for (int j = 0; j < 200; ++j) {
+                    auto message = generate_message(i, j);
+                    if (publisher->Publish("exchange", "routing_key", message) != 0) {
+                        dzlog_error("Publish %d failed", i);
+                        return;
+                    }
+                    // dzlog_debug("Publish success: %s", message.c_str());
+                    this_thread::sleep_for(chrono::milliseconds(100));
+                }
+                dzlog_info("Publish %d finished", i);
+            },
+            id));
+    }
+    for (auto& f : pubFutures) {
+        f.wait();
+    }
+    auto consumer = GetConsumer();
+    if (!consumer) {
+        dzlog_error("GetConsumer failed");
         return -1;
     }
-
-    vector<unique_ptr<RabbitMQConsumer>> consumers;
-    vector<future<void>> pubFutures;
-    for (int i = 0; i < 5; ++i) {
-        auto consumer = GetConsumer();
-        if (!consumer) {
-            dzlog_debug("GetConsumer failed");
-            return -1;
-        }
-        consumer->Consume(queue, [id = i](const string &message) {
-            // do nothing
-            dzlog_info("[%02d]Consume: %s", id, message.c_str());
-        });
-        assert(consumer->Consume(queue, [id = i](const string &message) {
-            // do nothing
-            dzlog_info("[%02d]Consume: %s", id, message.c_str());
-        }) != 0);
-        consumers.push_back(move(consumer));
-
-        auto fut = std::async([pub = publisher.get(), i]() {
-            for (int j = 0; j < 20; ++j) {
-                auto message = generate_message(i, j);
-                if (pub->Publish("exchange", "routing_key", message) != 0) {
-                    dzlog_debug("Publish failed");
-                    break;
-                }
-                dzlog_info("Publish success: %s", message.c_str());
-                this_thread::sleep_for(chrono::milliseconds(100));
+    if (consumer->Prepare(queue) != 0) {
+        dzlog_error("Prepare failed");
+        return -1;
+    }
+    auto cnt = 0;
+    string message;
+    while (true) {
+        if (consumer == nullptr) {
+            consumer = GetConsumer();
+            if (consumer == nullptr) {
+                dzlog_error("re-connect failed");
+                this_thread::sleep_for(chrono::seconds(5));
+                continue;
             }
-        });
-        pubFutures.push_back(move(fut));
+        }
+        auto ret = consumer->Consume(message, {2, 0});
+        if (ret != 0) {
+            dzlog_error("Consume failed: %d", ret);
+            consumer.reset();
+            this_thread::sleep_for(chrono::seconds(5));
+        }
+        if (message.empty()) {
+            dzlog_debug("Consume timeout");
+            continue;
+        }
+        // dzlog_info("Consume success: %s", message.c_str());
+        dzlog_info("Consume success");
+        this_thread::sleep_for(chrono::milliseconds(200));
+        if (++cnt >= 1000) {
+            dzlog_info("Consume finished");
+            break;
+        }
     }
-    for (auto &fut : pubFutures) {
-        fut.wait();
-    }
-    this_thread::sleep_for(chrono::seconds(30)); // I don't know when the consume is finished, so do you
     return 0;
 }

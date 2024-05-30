@@ -1,11 +1,7 @@
 #include <rabbitmq-c/amqp.h>
 #include <rabbitmq-c/tcp_socket.h>
 
-#include <functional>
-#include <future>
-#include <mutex>
 #include <string>
-#include <thread>
 
 namespace Rabbit {
 
@@ -118,10 +114,9 @@ public:
 
 public:
     /**
-     * @brief Publishes a message to a RabbitMQ exchange with the specified routing key. thread-safe.
+     * @brief Publishes a message to a RabbitMQ exchange with the specified routing key. thread-unsafe.
      *
-     * NOTE: ExchangeDeclare(), QueueDeclare() AND QueueBind() should be called before calling this function. Avoid call
-     * these function in multi-thread.
+     * NOTE: ExchangeDeclare(), QueueDeclare() AND QueueBind() should be called before calling this function.
      *
      * @param exchange The name of the exchange to publish the message to.
      * @param routing_key The routing key used to route the message to the appropriate queue(s).
@@ -130,12 +125,7 @@ public:
      * @return return 0 if success, otherwise return -1.
      */
     int Publish(const std::string& exchange, const std::string& routing_key, const std::string& message);
-
-private:
-    std::mutex mutex_;
 };
-
-using MessageCallback = std::function<void(const std::string&)>;
 
 class RabbitMQConsumer : public RabbitMQClient {
 public:
@@ -144,24 +134,25 @@ public:
 
 public:
     /**
-     * @brief Consumes messages from the specified queue and invokes the provided callback for each message. call-once.
+     * @brief Prepares the RabbitMQ for a specific queue. thread-unsafe.
      *
-     * NOTE: a workding thread will be created to consume messages.
-     * NOTE: ExchangeDeclare(), QueueDeclare() AND QueueBind() should be called before calling this function. Avoid call
-     * these function in multi-thread.
+     * This function prepares the RabbitMQ for a specific queue by performing necessary setup operations.
      *
-     * @param queue The name of the queue to consume messages from.
-     * @param callback The callback function to be invoked for each consumed message. The consumed message will be
-     * passed as a parameter to the callback.
-     *
-     * @return return 0 if success, otherwise return -1.
+     * @param queue The name of the queue to prepare.
+     * @return An integer value indicating the success or failure of the preparation process.
      */
-    int Consume(const std::string& queue, std::function<void(const std::string&)> callback);
-
-private:
-    std::mutex mutex_;
-    std::thread thread_;
-    std::promise<void> promise_;
+    int Prepare(const std::string& queue);
+    /**
+     * @brief Consumes a message from the RabbitMQ queue. thread-unsafe.
+     *
+     * This function consumes a message from the RabbitMQ queue and stores it in the provided string.
+     *
+     * @param message The string to store the consumed message.
+     * @param timeout The maximum time to wait for a message to be consumed.
+     * 
+     * @return return 0 if success or timeout, otherwise return -1.
+     */
+    int Consume(std::string& message, timeval timeout);
 };
 
 } // namespace Rabbit
