@@ -50,7 +50,7 @@ int RabbitMQClient::Connect(const string &vhost) {
         dzlog_error("socket open failed");
         return errMessage((amqp_status_enum)status);
     }
-    auto reply = amqp_login(conn_, vhost.c_str(), 1, AMQP_DEFAULT_FRAME_SIZE, 0, AMQP_SASL_METHOD_PLAIN, user_.c_str(),
+    auto reply = amqp_login(conn_, vhost.c_str(), 0, AMQP_DEFAULT_FRAME_SIZE, 0, AMQP_SASL_METHOD_PLAIN, user_.c_str(),
                             password_.c_str()); // login rabbit mq server
     if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
         dzlog_error("login failed");
