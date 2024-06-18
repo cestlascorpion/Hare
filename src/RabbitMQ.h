@@ -149,7 +149,7 @@ public:
      *
      * @param message The string to store the consumed message.
      * @param timeout The maximum time to wait for a message to be consumed.
-     * 
+     *
      * @return return 0 if success or timeout, otherwise return -1.
      */
     int Consume(std::string& message, timeval timeout);
